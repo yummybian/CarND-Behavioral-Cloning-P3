@@ -7,8 +7,7 @@ import cv2
 import random
 import numpy as np
 import sklearn
-from sklearn.model_selection import train_test_split
-
+import matplotlib.image as mpimg
 
 CORRECTION = 0.2
 IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 66, 200, 3
@@ -56,6 +55,7 @@ def preprocess(images):
         image = rgb2yuv(image)
         new_images.append(image)
     return new_images
+
 
 def random_flip(image, angle):
     """
@@ -122,12 +122,12 @@ def augment(images, angles):
 
 
 def load_images(img_dir, sample):
-    return [cv2.imread(os.path.join(img_dir, sample[i].split('/')[-1])) for i in range(3)]
+    return [mpimg.imread(os.path.join(img_dir, sample[i].strip().split('/')[-1])) for i in range(3)]
 
 
 def generator(samples, img_dir, batch_size=40, is_training=True):
     num_samples = len(samples)
-    while 1: # Loop forever so the generator never terminates
+    while True: # Loop forever so the generator never terminates
         random.shuffle(samples)
         for offset in range(0, num_samples, batch_size):
             batch_samples = samples[offset:offset+batch_size]
@@ -137,7 +137,7 @@ def generator(samples, img_dir, batch_size=40, is_training=True):
             for batch_sample in batch_samples:
                 angle = float(batch_sample[3])
                 # angles list contains center_angle, left_angle and right_angle
-                angles = [angle, angle-CORRECTION, angle+CORRECTION]
+                angles = [angle, angle+CORRECTION, angle-CORRECTION]
                 # images list contains center_image, left_image and right_image
                 images = load_images(img_dir, batch_sample)
                 if is_training and np.random.rand() < 0.6:
