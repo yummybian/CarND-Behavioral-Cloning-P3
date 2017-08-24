@@ -2,32 +2,32 @@
 # encoding: utf-8
 
 import os
-import csv
 import cv2
-import random
 import numpy as np
-import sklearn
+import pandas as pd
 import matplotlib.image as mpimg
+
 
 CORRECTION = 0.2
 IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS = 66, 200, 3
 INPUT_SHAPE = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
 
 
-def read_csv(file):
-    samples = []
-    with open(file) as csvfile:
-        reader = csv.reader(csvfile)
-        for line in reader:
-            samples.append(line)
-    return samples
+def load_csv(data_dir):
+    """
+    Load training data
+    """
+    data_df = pd.read_csv(os.path.join(data_dir, 'driving_log.csv'))
+    X = data_df[['center', 'left', 'right']].values
+    y = data_df['steering'].values
+    return X, y
 
 
 def crop(image):
     """
     Crop the image (removing the sky at the top and the car front at the bottom)
     """
-    return image[75:-25, :, :] # remove the sky and the car front
+    return image[40:-20, :, :]
 
 
 def resize(image):
@@ -39,22 +39,28 @@ def resize(image):
 
 def rgb2yuv(image):
     """
-    Convert the image from RGB to YUV (This is what the NVIDIA model does)
+    Convert the image from RGB to YUV
     """
     return cv2.cvtColor(image, cv2.COLOR_RGB2YUV)
 
 
-def preprocess(images):
+def preprocess(image):
     """
     Combine all preprocess functions into one
     """
-    new_images = []
-    for image in images:
-        image = crop(image)
-        image = resize(image)
-        image = rgb2yuv(image)
-        new_images.append(image)
-    return new_images
+    image = crop(image)
+    image = resize(image)
+    image = rgb2yuv(image)
+    return image
+
+
+def pick_image(images, angles):
+    """
+    Randomly choose an image from the center, left or right
+    """
+    i = np.random.choice(3)
+    return images[i], angles[i]
+
 
 
 def random_flip(image, angle):
@@ -67,86 +73,94 @@ def random_flip(image, angle):
     return image, angle
 
 
-def random_brightness(images, ratio=0.5):
+def random_brightness(image):
     """
     Randomly adjust brightness of the image.
     """
     # HSV (Hue, Saturation, Value) is also called HSB ('B' for Brightness).
-    new_images = []
-    for image in images:
-        hsv = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2HSV)
-        brightness = np.float64(hsv[:, :, 2])
-        brightness = brightness * (1.0 + np.random.uniform(-ratio, ratio))
-        brightness[brightness>255] = 255
-        brightness[brightness<0] = 0
-        hsv[:, :, 2] = brightness
-        new_images.append(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB))
-    return new_images
+    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    ratio = 1.0 + 0.4 * (np.random.rand() - 0.5)
+    hsv[:,:,2] =  hsv[:,:,2] * ratio
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
 
-def random_translation(images, angles, range_x=100, range_y=10):
+def random_translation(image, angle, range_x=100, range_y=10):
     """
     Randomly shift the image virtially and horizontally (translation).
     """
-    new_images, new_angles = [], []
-    for i, image in enumerate(images):
-        trans_x = range_x * (np.random.rand() - 0.5)
-        trans_y = range_y * (np.random.rand() - 0.5)
-        new_angles.append(angles[i]+trans_x * 0.002)
-        trans_m = np.float32([[1, 0, trans_x], [0, 1, trans_y]])
-        height, width = image.shape[:2]
-        new_images.append(cv2.warpAffine(image, trans_m, (width, height)))
-    return new_images, new_angles
+    trans_x = range_x * (np.random.rand() - 0.5)
+    trans_y = range_y * (np.random.rand() - 0.5)
+    angle += trans_x * 0.002
+    trans_m = np.float32([[1, 0, trans_x], [0, 1, trans_y]])
+    height, width = image.shape[:2]
+    image = cv2.warpAffine(image, trans_m, (width, height))
 
-
-def flip_images(images, angles):
-    return [cv2.flip(i, 1) for i in images], [a*(-1) for a in angles]
+    return image, angle
 
 
 def augment(images, angles):
     """
     Augment images through flip, shift and brightness tuning
     """
-    # 1. add flip images in order to recognize both clockwise and counter-clockwise roads
-    flip_imgs, flip_angles = flip_images(images, angles)
-    images.extend(flip_imgs)
-    angles.extend(flip_angles)
+    # 1. randomly pick up a image
+    image, angle = pick_image(images, angles)
 
-    # 2. randomly adjust shift
-    images, angles = random_translation(images, angles)
+    # 2. randomly flip the image
+    image, angle = random_flip(image, angle)
 
-    # 3. randomly adjust brightness
-    images = random_brightness(images)
+    # 3. randomly adjust shift
+    image, angle = random_translation(image, angle)
 
+    # 4. randomly adjust brightness
+    image = random_brightness(image)
+
+    return image, angle
+
+
+def load_images(img_dir, img_names, angle):
+    images = [mpimg.imread(os.path.join(img_dir, img_names[i].strip().split('/')[-1])) for i in range(3)]
+    angles = [angle, angle+CORRECTION, angle-CORRECTION]
     return images, angles
 
 
-def load_images(img_dir, sample):
-    return [mpimg.imread(os.path.join(img_dir, sample[i].strip().split('/')[-1])) for i in range(3)]
+def flip_images(images, angles):
+    return [cv2.flip(i, 1) for i in images], [a*(-1) for a in angles]
 
 
-def generator(samples, img_dir, batch_size=40, is_training=True):
-    num_samples = len(samples)
-    while True: # Loop forever so the generator never terminates
-        random.shuffle(samples)
-        for offset in range(0, num_samples, batch_size):
-            batch_samples = samples[offset:offset+batch_size]
+def batch_generator(img_dir, X_data, y_data, batch_size=40, is_training=True):
+    batch_images = np.empty([batch_size, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS])
+    batch_angles = np.empty(batch_size)
 
-            batch_images = []
-            batch_angles = []
-            for batch_sample in batch_samples:
-                angle = float(batch_sample[3])
-                # angles list contains center_angle, left_angle and right_angle
-                angles = [angle, angle+CORRECTION, angle-CORRECTION]
-                # images list contains center_image, left_image and right_image
-                images = load_images(img_dir, batch_sample)
-                if is_training and np.random.rand() < 0.6:
-                    images, angles = augment(images, angles)
+    while True:
+        i = 0
+        for idx in np.random.permutation(X_data.shape[0]):
+            image_names = X_data[idx]
+            angle = y_data[idx]
+            images, angles = load_images(img_dir, image_names, angle)
+            if is_training and np.random.rand() < 0.6:
+                image, angle = augment(images, angles)
+                image = preprocess(image)
+            else:
+                image = preprocess(images[0])
 
-                images = preprocess(images)
-                batch_images.extend(images)
-                batch_angles.extend(angles)
-            X_data = np.array(batch_images)
-            y_data = np.array(batch_angles)
-            yield sklearn.utils.shuffle(X_data, y_data)
+            batch_images[i] = image
+            batch_angles[i] = angle
+            i += 1
+            if i >= batch_size:
+                break
+        yield batch_images, batch_angles
 
+
+def random_show_image(img_dir, X_data, y_data):
+    import matplotlib.pyplot as plt
+
+    idx = np.random.choice(X_data.shape[0])
+    image_names = X_data[idx]
+    angle = y_data[idx]
+
+    images, angles = load_images(img_dir, image_names, angle)
+    image, _ = augment(images, angles)
+    image = preprocess(image)
+
+    plt.imshow(image)
+    plt.show()
