@@ -4,7 +4,7 @@
 
 |Lake Track|
 |:--------:|
-|[![Lake Track](examples/lake_track.png)](https://youtu.be/DhLJaF0NYY4)|
+|[![Lake Track](examples/lake_track.gif)](https://youtu.be/DhLJaF0NYY4)|
 |[YouTube Link](https://youtu.be/DhLJaF0NYY4)|
 
 **Behavioral Cloning Project**
